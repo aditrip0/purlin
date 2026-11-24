@@ -128,5 +128,28 @@ namespace purlin {
       __syncwarp();
     }
   }
+
+  // Consume hook (Mode A). A consumer CTA calls this after copying its slice of a chunk:
+  // it records that this CTA has now landed `chunksLanded` chunks of `peer` into dst.
+  __device__ __forceinline__
+  static void publishReady(const Context& ctx, const int peer, const int intraIdx, const uint64_t chunksLanded) {
+    if (ctx.readyFlags == nullptr) return;
+    __syncthreads(); // every thread's writes to this CTA's slice are done
+    if (!threadIdx.x) {
+      signalOne(ctx.readyFlags + peer * READY_SLOTS + intraIdx, chunksLanded);
+    }
+  }
+  // Returns once chunk `chunk` (0-based) of `peer` is fully in dst on this GPU, which also
+  // means every earlier chunk of that peer is. `blockSetSize` = consumer CTAs per peer.
+  // Flags count up from 0, so the caller zeroes readyFlags before each collective call.
+  __device__ __forceinline__
+  static void awaitChunk(const Context& ctx, const int peer, const int chunk, const int blockSetSize) {
+    if (!threadIdx.x) {
+      for (int s = 0; s < blockSetSize; ++s) {
+        waitUntilAtLeast(ctx.readyFlags + peer * READY_SLOTS + s, static_cast<uint64_t>(chunk) + 1);
+      }
+    }
+    __syncthreads();
+  }
 }
 #endif //PURLIN_SIGNAL_CUH

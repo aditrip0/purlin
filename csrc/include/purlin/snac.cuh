@@ -836,6 +836,7 @@ namespace purlin {
         const auto *__restrict__ srcP = srcBase;
         auto *__restrict__ dstP = dst;
         superCopy<PurlinAtom>(dstP, srcP, bytes, workspace, peerBlock.blockSetSize, peerBlock.intraIdx);
+        publishReady(ctx, peerBlock.peer, peerBlock.intraIdx, 1);
         markEpoch(ctx, bIdx, epochState.nextEpoch);
       }
       else if constexpr (Topology::CYCLIC) {
@@ -919,6 +920,7 @@ namespace purlin {
           waitChunk(flag);
           superCopy<PurlinAtom, TPolicy::CHUNK_SIZE>(dstP, srcP, workspace,
                                                         peerBlock.blockSetSize, peerBlock.intraIdx);
+          publishReady(ctx, peerBlock.peer, peerBlock.intraIdx, i + 1);
           srcP += TPolicy::CHUNK_SIZE;
           dstP += TPolicy::CHUNK_SIZE;
         }
@@ -929,6 +931,7 @@ namespace purlin {
           srcP = srcBase + (TPolicy::CHUNK_SIZE * chunks);
           waitChunk(flag);
           superCopy<PurlinAtom>(dstP, srcP, residue, workspace, peerBlock.blockSetSize, peerBlock.intraIdx);
+          publishReady(ctx, peerBlock.peer, peerBlock.intraIdx, chunks + 1);
         }
         const auto nextEpoch = chunkedNextEpoch(epochState.epoch,
           outputLayout == DataLayout::transposedV ? cuda::ceil_div(globalMaxBytes, chunkSize) :
