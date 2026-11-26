@@ -6,6 +6,8 @@
 // Part 2 (timing): NCCL AG + cuBLAS, Purlin AG + cuBLAS, and Purlin AG overlapped with cuBLAS
 //   GEMMs that each start once their rows' chunks have landed (split SMs: AG keeps its CTAs,
 //   GEMMs use the rest). Each fused run's Y must equal the NCCL baseline's Y bit for bit.
+//   Fused is chunk-major: chunks land on all peers in lockstep, so once a group of chunks has
+//   landed everywhere, one batched GEMM multiplies those rows of every peer.
 // Run: mpirun -n 4 ./testAGGEMM
 #include <cstdio>
 #include <vector>
@@ -20,8 +22,8 @@
 constexpr auto nArch = purlin::normalizeArch<ARCH>();
 using Atom = purlin::Atom<nArch, purlin::Configuration<128, 16, 8, 8, 2>>; // same as examples/ag
 constexpr size_t CHUNK = 4 * 1024 * 1024;
-constexpr int PUT_BLOCKS = 32;
-constexpr int S = 8; // consumer CTAs per peer
+constexpr int PUT_BLOCKS = 8;
+constexpr int S = 2; // consumer CTAs per peer. 16 CTAs total: as fast as 64, leaves more SMs to the GEMMs
 using Cfg = purlin::CollectiveConfig<purlin::CollectiveType::chunked, PUT_BLOCKS, purlin::UNUSED, CHUNK>;
 constexpr int M = 4096, K = 4096; // rows per rank, columns of X: 32 MiB per rank
 constexpr int ROWS_PER_CHUNK = CHUNK / (K * 2), CHUNKS = M / ROWS_PER_CHUNK;
@@ -60,9 +62,9 @@ __global__ void checkChunks(const __grid_constant__ purlin::Context ctx, const _
     n += __bfloat162float(p[i]) != val(peer, row0 + i / K, i % K);
   atomicAdd(bad, n);
 }
-// Holds its stream until `chunk` of `peer` has landed; the next GEMM on the stream waits for it.
-__global__ void waitChunk(const __grid_constant__ purlin::Context ctx, int peer, int chunk) {
-  purlin::awaitChunk(ctx, peer, chunk, S);
+// Holds its stream until chunks [0, chunk] of every peer have landed; the next GEMM waits for it.
+__global__ void waitChunkAllPeers(const __grid_constant__ purlin::Context ctx, int world, int chunk) {
+  for (int p = 0; p < world; ++p) purlin::awaitChunk(ctx, p, chunk, S);
 }
 __global__ void countDiff(const __nv_bfloat16* a, const __nv_bfloat16* b, size_t n, unsigned long long* bad) {
   unsigned long long c = 0;
@@ -149,30 +151,40 @@ void run() {
   };
   const auto ncclAG = [&] { CK(ncclAllGather(x, xAll, size_t(M) * K, ncclBfloat16, comm, s1)); };
 
-  if (!rank) std::printf("N,chunksPerGemm,ncclAG_ms,purlinAG_ms,gemm_ms,nccl+gemm_ms,purlin+gemm_ms,fused_ms,fused_vs_nccl,Y_elements_differing\n");
+  // Chunk groups per GEMM step, e.g. {1, 1, 2, 4}: small first so the GEMMs start early.
+  const std::vector<std::pair<const char*, std::vector<int>>> schedules{
+    {"2-2-2-2", {2, 2, 2, 2}}, {"4-4", {4, 4}}, {"1-1-2-4", {1, 1, 2, 4}}};
+  if (!rank) std::printf("N,schedule,ncclAG_ms,purlinAG_ms,gemm_ms,nccl+gemm_ms,purlin+gemm_ms,fused_ms,"
+                         "fused_vs_nccl,Y_elements_differing\n");
   for (int n : {1024, 2048, 4096, 8192}) {
     const float tNccl = timeMs(ncclAG), tPurlin = timeMs(purlinAG);
     const float tGemm = timeMs([&] { gemm(h1, 0, rowsAll, n, yRef); });
     const float tNcclGemm = timeMs([&] { ncclAG(); gemm(h1, 0, rowsAll, n, yRef); });  // also leaves yRef
     const float tPurlinGemm = timeMs([&] { purlinAG(); gemm(h1, 0, rowsAll, n, y); });
-    for (int g : {1, 2, CHUNKS}) {  // chunks of one peer covered by each GEMM
+    for (const auto& [name, schedule] : schedules) {
+      const auto& groups = schedule;  // a plain reference, so the lambda below can capture it
+      // One batched GEMM per group: batch = peers, stride = one peer's rows.
       const auto fused = [&] {
         CK(cudaMemsetAsync(ctx.readyFlags, 0, flagBytes, s1));
         CK(cudaEventRecord(go, s1)); CK(cudaStreamWaitEvent(s2, go));
         allGather<<<blocks, Atom::THREADS, smem, s1>>>(args, ctx);
-        for (int j = 0; j < world; ++j) {
-          const int peer = (rank + j) % world;  // own rows first: they land first
-          for (int c = 0; c < CHUNKS; c += g) {
-            waitChunk<<<1, 32, 0, s2>>>(ctx, peer, c + g - 1);
-            gemm(h2, size_t(peer) * M + size_t(c) * ROWS_PER_CHUNK, g * ROWS_PER_CHUNK, n, y);
-          }
+        int c = 0;
+        for (const int g : groups) {
+          const size_t row0 = size_t(c) * ROWS_PER_CHUNK;
+          c += g;
+          waitChunkAllPeers<<<1, 32, 0, s2>>>(ctx, world, c - 1);
+          CK(cublasGemmStridedBatchedEx(h2, CUBLAS_OP_N, CUBLAS_OP_N, n, g * ROWS_PER_CHUNK, K, &one,
+                                        w, CUDA_R_16BF, 8192, 0,
+                                        xAll + row0 * K, CUDA_R_16BF, K, (long long)M * K, &zero,
+                                        y + row0 * n, CUDA_R_16BF, n, (long long)M * n, world,
+                                        CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT));
         }
         CK(cudaEventRecord(done, s2)); CK(cudaStreamWaitEvent(s1, done));
       };
       CK(cudaMemsetAsync(y, 0, rowsAll * n * 2, s1));
       const float tFused = timeMs(fused);
       const auto diff = sameAsRef(n);
-      if (!rank) std::printf("%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%llu\n", n, g, tNccl, tPurlin, tGemm,
+      if (!rank) std::printf("%d,%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%llu\n", n, name, tNccl, tPurlin, tGemm,
                              tNcclGemm, tPurlinGemm, tFused, tNcclGemm / tFused, diff);
     }
   }
