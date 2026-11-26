@@ -253,6 +253,12 @@ purlin_enable_rdc(testAG)
 target_link_libraries(testAG PRIVATE nvshmem::nvshmem_device nvshmem::nvshmem_host)
 purlin_add_lto(testAG)
 
+add_executable(testAGGEMM tests/ag_gemm.cu)
+purlin_benchmark_target(testAGGEMM)
+purlin_enable_rdc(testAGGEMM)
+target_link_libraries(testAGGEMM PRIVATE nvshmem::nvshmem_device nvshmem::nvshmem_host CUDA::cublas nccl)
+purlin_add_lto(testAGGEMM)
+
 add_executable(testAGV tests/agv.cu)
 purlin_benchmark_target(testAGV)
 purlin_enable_rdc(testAGV)
