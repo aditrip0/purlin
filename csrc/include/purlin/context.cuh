@@ -7,6 +7,7 @@
 #include <cuda/cmath>
 #include "packet.cuh"
 namespace purlin {
+  constexpr int READY_SLOTS = 64; // max consumer CTAs per peer for readyFlags
   struct VState {
     size_t maxOutBytes = 0; // max size across all output splits
     size_t maxBytes = 0; // max size across all sizes
@@ -29,6 +30,9 @@ namespace purlin {
     uint32_t* putCounter = nullptr; // [world, maxChunks]
     uint32_t* redCounter = nullptr; // [maxChunks]
     uint32_t* consumedCounter = nullptr; // [world, maxChunks]
+    // Consume hook (Mode A), optional. Local, not symmetric. Slot [peer, s] holds how many
+    // chunks consumer CTA s of that peer's block set has copied into dst. Null = off.
+    uint64_t* readyFlags = nullptr; // [world, READY_SLOTS]
     size_t stagingTRSize = 0;
     size_t packetStride = 0;
     /*state for variable length collectives*/
