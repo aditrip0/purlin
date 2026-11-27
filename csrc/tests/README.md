@@ -145,6 +145,22 @@ NVSHMEM_BOOTSTRAP=MPI NVSHMEM_REMOTE_TRANSPORT=none \
   mpirun -n 4 ./cmake-build-release/testA2AVREADY
 ```
 
+## MoE layer benchmark
+
+`testMOE` times one MoE layer per GPU (pack, dispatch AllToAllV, expert GEMMs, reduce, combine AllToAllV, unpack)
+with NCCL or Purlin for both AllToAllVs, and checks that the Purlin layer equals the NCCL layer bit for bit.
+
+- `MOE_CONFIG=toy`: 1 expert per GPU, one 4096 × 4096 GEMM, tokens split evenly.
+- `MOE_CONFIG=qwen`: one Qwen3-30B-A3B MoE layer on EP 4 (32 experts per GPU, top-8, grouped cuBLAS GEMMs), random top-8 routing.
+
+Needs 4 ranks:
+
+```sh
+cmake --build cmake-build-release --target testMOE
+NVSHMEM_BOOTSTRAP=MPI NVSHMEM_REMOTE_TRANSPORT=none MOE_CONFIG=qwen \
+  mpirun -n 4 ./cmake-build-release/testMOE
+```
+
 ## Examples
 
 The device-kernel examples (`ag`, `a2a`, `ar`, `rs`, `push`, and `pull`) use:

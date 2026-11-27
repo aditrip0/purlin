@@ -283,6 +283,12 @@ purlin_enable_rdc(testA2AVREADY)
 target_link_libraries(testA2AVREADY PRIVATE nvshmem::nvshmem_device nvshmem::nvshmem_host)
 purlin_add_lto(testA2AVREADY)
 
+add_executable(testMOE tests/moe.cu)
+purlin_benchmark_target(testMOE)
+purlin_enable_rdc(testMOE)
+target_link_libraries(testMOE PRIVATE nvshmem::nvshmem_device nvshmem::nvshmem_host CUDA::cublas nccl)
+purlin_add_lto(testMOE)
+
 add_executable(testAGVSKEW tests/agvskew.cu)
 purlin_benchmark_target(testAGVSKEW)
 purlin_enable_rdc(testAGVSKEW)
