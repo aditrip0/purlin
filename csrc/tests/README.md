@@ -128,6 +128,23 @@ NVSHMEM_BOOTSTRAP=MPI NVSHMEM_REMOTE_TRANSPORT=none \
   timeout 180s mpirun -n 2 ./cmake-build-release/testSetupNvshmem
 ```
 
+## Ready flags (consume hook)
+
+With `ctx.readyFlags` set, consumers publish how many chunks of each peer have landed in `dst`,
+so a kernel on another stream can start on a chunk before the collective finishes.
+
+- `testAGGEMM` checks the flags on AllGather (checkers wait on each chunk, `dst` starts as 0xFF)
+  and times AllGather + cuBLAS GEMM against NCCL AllGather + cuBLAS.
+- `testA2AVREADY` checks the flags on AllToAllV across the packet, staged and skew-weighted paths:
+  checkers wait on each (peer, chunk) with `awaitChunkV` and compare it with the expected bytes.
+  Needs 4 ranks.
+
+```sh
+cmake --build cmake-build-release --target testAGGEMM testA2AVREADY
+NVSHMEM_BOOTSTRAP=MPI NVSHMEM_REMOTE_TRANSPORT=none \
+  mpirun -n 4 ./cmake-build-release/testA2AVREADY
+```
+
 ## Examples
 
 The device-kernel examples (`ag`, `a2a`, `ar`, `rs`, `push`, and `pull`) use:

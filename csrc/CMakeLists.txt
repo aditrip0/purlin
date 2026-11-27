@@ -277,6 +277,12 @@ purlin_enable_rdc(testA2AV)
 target_link_libraries(testA2AV PRIVATE nvshmem::nvshmem_device nvshmem::nvshmem_host)
 purlin_add_lto(testA2AV)
 
+add_executable(testA2AVREADY tests/a2av_ready.cu)
+purlin_benchmark_target(testA2AVREADY)
+purlin_enable_rdc(testA2AVREADY)
+target_link_libraries(testA2AVREADY PRIVATE nvshmem::nvshmem_device nvshmem::nvshmem_host)
+purlin_add_lto(testA2AVREADY)
+
 add_executable(testAGVSKEW tests/agvskew.cu)
 purlin_benchmark_target(testAGVSKEW)
 purlin_enable_rdc(testAGVSKEW)
