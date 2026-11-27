@@ -140,7 +140,9 @@ namespace purlin {
     __syncthreads(); // every thread's writes to this CTA's slice are done
     if (!threadIdx.x) {
       if (blockSetSize) ctx.readyFlags[peer * READY_SLOTS + READY_SLOTS - 1] = blockSetSize;
-      signalOne(ctx.readyFlags + peer * READY_SLOTS + intraIdx, chunksLanded);
+      // Readers are kernels on this GPU, so a GPU-scope release is enough (system scope is much slower).
+      asm volatile("st.release.gpu.global.b64 [%0], %1;"
+        :: "l"(ctx.readyFlags + peer * READY_SLOTS + intraIdx), "l"(chunksLanded) : "memory");
     }
   }
   // Returns once chunk `chunk` (0-based) of `peer` is fully in dst on this GPU, which also
