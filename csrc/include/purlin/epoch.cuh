@@ -131,11 +131,15 @@ namespace purlin {
 
   // Consume hook (Mode A). A consumer CTA calls this after copying its slice of a chunk:
   // it records that this CTA has now landed `chunksLanded` chunks of `peer` into dst.
+  // AllToAllV sizes each peer's CTA set by stream size, so it also passes blockSetSize,
+  // stored in the peer's last slot for awaitChunkV.
   __device__ __forceinline__
-  static void publishReady(const Context& ctx, const int peer, const int intraIdx, const uint64_t chunksLanded) {
+  static void publishReady(const Context& ctx, const int peer, const int intraIdx, const uint64_t chunksLanded,
+                           const int blockSetSize = 0) {
     if (ctx.readyFlags == nullptr) return;
     __syncthreads(); // every thread's writes to this CTA's slice are done
     if (!threadIdx.x) {
+      if (blockSetSize) ctx.readyFlags[peer * READY_SLOTS + READY_SLOTS - 1] = blockSetSize;
       signalOne(ctx.readyFlags + peer * READY_SLOTS + intraIdx, chunksLanded);
     }
   }
@@ -150,6 +154,14 @@ namespace purlin {
       }
     }
     __syncthreads();
+  }
+  // awaitChunk for AllToAllV: reads the peer's CTA count from its last slot first.
+  __device__ __forceinline__
+  static void awaitChunkV(const Context& ctx, const int peer, const int chunk) {
+    auto* setSize = ctx.readyFlags + peer * READY_SLOTS + READY_SLOTS - 1;
+    if (!threadIdx.x) waitUntilAtLeast(setSize, 1);
+    __syncthreads();
+    awaitChunk(ctx, peer, chunk, static_cast<int>(*reinterpret_cast<volatile uint64_t*>(setSize)));
   }
 }
 #endif //PURLIN_SIGNAL_CUH

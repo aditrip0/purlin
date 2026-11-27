@@ -503,6 +503,7 @@ namespace purlin {
                                    ? size_t{0}
                                    : cuda::std::min(bytesP, myBytes - startOffset);
         PurlinAtom::copy(dstP + startOffset, srcP + startOffset, actualBytes, workspace);
+        publishReady(ctx, ctx.rank, lBIdx, cuda::ceil_div(myBytes, CHUNK_SIZE), TPolicy::LOCAL_PUT_BLOCKS);
       }
       else {
         const auto cBIdx = bIdx - totalPutBlocks;
@@ -512,6 +513,7 @@ namespace purlin {
           auto *__restrict__ window = ctx.stagingLR[ctx.rank] +
             (epochState.lrStagingPrefix + static_cast<size_t>(m.peerBlock.peer) * ctx.packetStride);
           packetGet<PurlinAtom>(dst + m.offsetFor, window, m.bytesFor, epochState.nextEpoch, m.peerBlock);
+          publishReady(ctx, m.peerBlock.peer, m.peerBlock.intraIdx, 1, m.peerBlock.blockSetSize);
         }
         else if (cyclicStream(m.bytesFor, windowBytes)) {
           CyclicStreamSnac::consume(dst + m.offsetFor, m.bytesFor, workspace,
@@ -871,6 +873,7 @@ namespace purlin {
           const auto *__restrict__ srcP = srcBase + static_cast<size_t>(slot) * chunkSize;
           superCopy<PurlinAtom, TPolicy::CHUNK_SIZE>(dstP, srcP, workspace,
                                                         peerBlock.blockSetSize, peerBlock.intraIdx);
+          publishReady(ctx, peerBlock.peer, peerBlock.intraIdx, i + 1, peerBlock.blockSetSize);
           if (publishDrains) {
             signalConsumed(consumedCounter + slot, consumedSignal, peerBlock.blockSetSize, flag);
           }
@@ -887,6 +890,7 @@ namespace purlin {
           }
           __syncthreads();
           superCopy<PurlinAtom>(dstP, srcP, residue, workspace, peerBlock.blockSetSize, peerBlock.intraIdx);
+          publishReady(ctx, peerBlock.peer, peerBlock.intraIdx, chunks + 1, peerBlock.blockSetSize);
           if (publishDrains) {
             signalConsumed(consumedCounter + slot, consumedSignal, peerBlock.blockSetSize, flag);
           }
